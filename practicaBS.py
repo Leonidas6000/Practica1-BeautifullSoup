@@ -1,5 +1,3 @@
-#encoding:utf-8
-
 import sqlite3
 from tokenize import Double
 from bs4 import BeautifulSoup
@@ -32,63 +30,71 @@ def almacenar_bd():
         VALORACION REAL,
         VOTOS INT);''')
 
-    f = urllib.request.urlopen("https://www.javirecetas.com/receta/recetas-faciles-cocina-facil/")
-    s = BeautifulSoup(f, "lxml")
-    lista_link_recetas = s.find("div", id="contenido").find_all("div", class_="post")
-    for link_receta in lista_link_recetas:
+    # Iterar sobre las primeras 4 páginas
+    for pagina in range(1, PAGINAS + 1):
+        if pagina == 1:
+            url = "https://www.javirecetas.com/receta/recetas-faciles-cocina-facil/"
+        else:
+            url = f"https://www.javirecetas.com/receta/recetas-faciles-cocina-facil/page/{pagina}/"
         
-        titulo=link_receta.find("div", class_="titulo").find("a")
-        if titulo:  # Verifica si existe el enlace <a>
-            titulo = titulo.string.strip()
-        fechaSinStrip = link_receta.find("div").find("small",class_="bajoTitulo").getText().replace("PUBLICADO EL ","").replace(
-            " POR JAVI RECETAS","")
-        fecha = datetime.strptime(fechaSinStrip.strip(), '%d-%m-%Y')
-        
-        f = urllib.request.urlopen(link_receta.a['href'])
+        f = urllib.request.urlopen(url)
         s = BeautifulSoup(f, "lxml")
-        datos = s.find("div", id="contenido")
+        lista_link_recetas = s.find("div", id="contenido").find_all("div", class_="post")
+        
+        for link_receta in lista_link_recetas:
+            
+            titulo=link_receta.find("div", class_="titulo").find("a")
+            if titulo:  # Verifica si existe el enlace <a>
+                titulo = titulo.string.strip().encode('utf-8').decode('utf-8')
+            fechaSinStrip = link_receta.find("div").find("small",class_="bajoTitulo").getText().replace("PUBLICADO EL ","").replace(
+                " POR JAVI RECETAS","")
+            fecha = datetime.strptime(fechaSinStrip.strip(), '%d-%m-%Y').date()
+            f = urllib.request.urlopen(link_receta.a['href'])
+            s = BeautifulSoup(f, "lxml")
+            datos = s.find("div", id="contenido")
 
-        variasCategorias = datos.find("span", class_="categoriasReceta").find_all("a")
-        categorias= set()
-        if variasCategorias:
-            for a in variasCategorias:
-                categoria=a.getText()
-                categorias.add(categoria)
-        else:
-            categorias.append("Desconocido")
-
-
-        ingredientes= set()
-        variosIngredientes = datos.find("span", class_="ingredientesReceta").find_all("a")
-        if not variosIngredientes:
-            ingredientes.add("Desconocido")
-        else:  
-            for a in variosIngredientes:
-                ingredientes.add(a.getText())
-
-        valoracion = datos.find("div", class_="post-ratings").string
-        patron_valoracion = r"ValoraciÃ³n:\s([\d,]+)"
-        resultado_valoracion = datos.search(patron_valoracion, valoracion)
-        if resultado_valoracion:
-                valoracion = Double(resultado_valoracion.group(1).replace(',', '.'))
-        else:
-                valoracion=0.
+            variasCategorias = datos.find("span", class_="categoriasReceta").find_all("a")
+            categorias = set()
+            if variasCategorias:
+                for a in variasCategorias:
+                    categoria = a.getText()
+                    categorias.add(categoria)
+            else:
+                categorias.add("Desconocido")
 
 
-        votos = datos.find("div", class_="post-ratings").string
-        patron_votos = r"Votos:\s(\d+)"
-        resultado_votos = datos.search(patron_votos, votos)
-        if resultado_votos:
-            votos = int(resultado_votos.group(1))
-        else:
-            votos = 0
+            ingredientes= set()
+            variosIngredientes = datos.find("span", class_="ingredientesReceta").find_all("a")
+            if not variosIngredientes:
+                ingredientes.add("Desconocido")
+            else:  
+                for a in variosIngredientes:
+                    ingredientes.add(a.getText())
+            
+            valoracion = datos.find("div", class_="post-ratings").getText()
+            patron_valoracion = r"Valoración:\s*([\d,]+)"
+            resultado_valoracion = re.search(patron_valoracion, valoracion)
+            if resultado_valoracion:
+                    valoracion = float(resultado_valoracion.group(1).replace(',', '.'))
+            else:
+                    valoracion = 0.0
 
 
- 
-    
+            votos = datos.find("div", class_="post-ratings").getText()
+            patron_votos = r"Votos:\s*(\d+)"
+            resultado_votos = re.search(patron_votos, votos)
+            
+            if resultado_votos:
+                votos = int(resultado_votos.group(1))
+            else:
+                votos = 0
 
-        conn.execute("INSERT INTO RECETAS (TITULO, FECHA, CATEGORIAS, INGREDIENTES, VALORACION, VOTOS) VALUES (?,?,?,?,?,?)",
-                     (titulo, fecha, categorias, ingredientes, float(valoracion), int(votos)))
+            # Convertir los sets a strings antes de la inserción
+            categorias_str = ', '.join(categorias)
+            ingredientes_str = ', '.join(ingredientes)
+
+            conn.execute("INSERT INTO RECETAS (TITULO, FECHA, CATEGORIAS, INGREDIENTES, VALORACION, VOTOS) VALUES (?,?,?,?,?,?)",
+                         (titulo, fecha, categorias_str, ingredientes_str, float(valoracion), int(votos)))
     conn.commit()
 
     cursor = conn.execute("SELECT COUNT(*) FROM RECETAS")
@@ -121,14 +127,18 @@ def buscar_por_categoria():
         conn.close()
 
     conn = sqlite3.connect('recetas.db')
-    cursor = conn.execute("SELECT DISTINCT CATEGORIAS FROM RECETAS")
-    categorias = set([cat[0] for cat in cursor])
+    cursor = conn.execute("SELECT CATEGORIAS FROM RECETAS")
+    categorias = set()
+    for row in cursor:
+        categorias_lista = row[0].split(', ')
+        for categoria in categorias_lista:
+            categorias.add(categoria.strip())
     conn.close()
 
     v = Toplevel()
     label = Label(v, text="Seleccione una categoría:")
     label.pack(side=LEFT)
-    entry = Spinbox(v, values=list(categorias))
+    entry = Spinbox(v, values=list(sorted(categorias)))
     entry.bind("<Return>", listar)
     entry.pack(side=LEFT)
 
@@ -141,31 +151,41 @@ def buscar_por_ingrediente():
         conn.close()
 
     conn = sqlite3.connect('recetas.db')
-    cursor = conn.execute("SELECT DISTINCT INGREDIENTES FROM RECETAS")
-    ingredientes = set([ing[0] for ing in cursor])
+    cursor = conn.execute("SELECT INGREDIENTES FROM RECETAS")
+    # Crear un conjunto para almacenar ingredientes únicos
+    ingredientes = set()
+    for row in cursor:
+        # Dividir la cadena de ingredientes y añadir cada ingrediente al conjunto
+        ingredientes_lista = row[0].split(', ')
+        for ingrediente in ingredientes_lista:
+            ingredientes.add(ingrediente.strip())
     conn.close()
 
     v = Toplevel()
     label = Label(v, text="Seleccione un ingrediente:")
     label.pack(side=LEFT)
-    entry = Spinbox(v, values=list(ingredientes))
+    entry = Spinbox(v, values=list(sorted(ingredientes)))  # Ordenar la lista de ingredientes
     entry.bind("<Return>", listar)
     entry.pack(side=LEFT)
 
 # Función para buscar recetas por fecha y categoría
 def buscar_por_fecha_categoria():
     def listar():
-        fecha = datetime.strptime(entry_fecha.get(), '%d/%m/%Y')
+        fecha = datetime.strptime(entry_fecha.get(), '%d/%m/%Y').date()
         categoria = spin_categoria.get()
 
         conn = sqlite3.connect('recetas.db')
-        cursor = conn.execute("SELECT * FROM RECETAS WHERE FECHA < ? AND CATEGORIAS LIKE ?", (fecha.strftime('%d/%m/%Y'), '%' + categoria + '%'))
+        cursor = conn.execute("SELECT * FROM RECETAS WHERE FECHA >= ? AND CATEGORIAS LIKE ?", (fecha, '%' + categoria + '%'))
         imprimir_lista(cursor)
         conn.close()
 
     conn = sqlite3.connect('recetas.db')
-    cursor = conn.execute("SELECT DISTINCT CATEGORIAS FROM RECETAS")
-    categorias = set([cat[0] for cat in cursor])
+    cursor = conn.execute("SELECT CATEGORIAS FROM RECETAS")
+    categorias = set()
+    for row in cursor:
+        categorias_lista = row[0].split(', ')
+        for categoria in categorias_lista:
+            categorias.add(categoria.strip())
     conn.close()
 
     v = Toplevel()
@@ -176,7 +196,7 @@ def buscar_por_fecha_categoria():
 
     label_categoria = Label(v, text="Seleccione una categoría:")
     label_categoria.pack(side=LEFT)
-    spin_categoria = Spinbox(v, values=list(categorias))
+    spin_categoria = Spinbox(v, values=list(sorted(categorias)))
     spin_categoria.pack(side=LEFT)
 
     boton_buscar = Button(v, text="Buscar", command=listar)
